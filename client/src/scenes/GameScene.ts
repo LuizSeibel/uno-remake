@@ -1,6 +1,9 @@
 import Phaser from 'phaser';
 import { io, Socket } from 'socket.io-client';
 import type { Card, CardActionEvent, Player, Room, RoomErrorPayload } from '../types';
+import CardStage from './ui/CardStage';
+import GameHud from './ui/GameHud';
+import type { HudSnapshot } from './ui/GameHud';
 
 const HUD_WIDTH = 360;
 const HUD_MARGIN = 32;
@@ -10,6 +13,7 @@ const PANEL_BORDER = 0x1f2a44;
 const PANEL_ACCENT = '#fcd34d';
 const FONT_FAMILY = '"Space Mono", "Fira Code", monospace';
 const TEXT_RESOLUTION = Math.min(window.devicePixelRatio || 1, 2);
+const INSTRUCTION_TEXT = 'P • jogar carta\nD • comprar carta';
 
 type SceneLaunchData = {
   autoAction?: 'create' | 'join';
@@ -19,20 +23,9 @@ type SceneLaunchData = {
 
 export default class GameScene extends Phaser.Scene {
   private socket!: Socket;
-  private statusText?: Phaser.GameObjects.Text;
-  private actionLog?: Phaser.GameObjects.Text;
-  private roomText?: Phaser.GameObjects.Text;
-  private playerListText?: Phaser.GameObjects.Text;
-  private cardBase?: Phaser.GameObjects.Rectangle;
-  private cardShadow?: Phaser.GameObjects.Rectangle;
-  private cardLabel?: Phaser.GameObjects.Text;
-  private playerBadge?: Phaser.GameObjects.Text;
   private backgroundElements: Phaser.GameObjects.GameObject[] = [];
-  private hudElements: Phaser.GameObjects.GameObject[] = [];
-  private stageElements: Phaser.GameObjects.GameObject[] = [];
-  private leaveButtonBg?: Phaser.GameObjects.Rectangle;
-  private leaveButtonLabel?: Phaser.GameObjects.Text;
-  private leaveButtonZone?: Phaser.GameObjects.Zone;
+  private hud?: GameHud;
+  private cardStage?: CardStage;
   private player?: Player;
   private roomId?: string;
   private logLines: string[] = [];
@@ -79,16 +72,14 @@ export default class GameScene extends Phaser.Scene {
       this.roomId = roomId;
       if (this.player) this.player.roomId = roomId;
       this.pushLog(`Sala ${roomId} criada. Compartilhe o código!`);
-      this.updateRoomText();
-      this.updateLeaveButtonState();
+      this.updateRoomDetails();
     });
 
     this.socket.on('room:joined', ({ roomId }: { roomId: string }) => {
       this.roomId = roomId;
       if (this.player) this.player.roomId = roomId;
       this.pushLog(`Entrou na sala ${roomId}.`);
-      this.updateRoomText();
-      this.updateLeaveButtonState();
+      this.updateRoomDetails();
     });
 
     this.socket.on('room:state', (room: Room) => {
@@ -97,7 +88,7 @@ export default class GameScene extends Phaser.Scene {
         const me = room.players.find((p) => p.id === this.player?.id);
         if (me) this.player = me;
       }
-      this.refreshPlayerBadge();
+      this.cardStage?.setPlayerNickname(this.player?.nickname);
       const list =
         room.players
           .map((p) => {
@@ -106,38 +97,58 @@ export default class GameScene extends Phaser.Scene {
             return `${star}${p.nickname}${self}`;
           })
           .join('\n') || 'Sala vazia';
-      this.lastPlayerListMessage = list;
-      this.playerListText?.setText(list);
-      this.updateRoomText();
-      this.updateLeaveButtonState();
+      this.updateRoomDetails(list);
     });
 
     this.socket.on('room:error', (payload: RoomErrorPayload) => {
       this.pushLog(`Erro: ${payload.message}`);
       this.isLeavingRoom = false;
-      this.updateLeaveButtonState();
+      this.hud?.update({ leaveEnabled: this.canLeaveRoom() });
     });
 
     this.socket.on('room:left', () => {
       this.roomId = undefined;
       this.isLeavingRoom = false;
-      this.updateRoomText();
-      this.updateLeaveButtonState();
-      this.refreshPlayerBadge();
+      this.updateRoomDetails('Nenhum jogador ainda.');
+      this.cardStage?.setPlayerNickname(undefined);
       this.goBackToLobby('Você saiu da sala.');
     });
 
     this.socket.on('connect_error', (err) => {
       console.error('Socket error', err);
       this.statusMessage = 'Falha na conexão';
-      this.statusText?.setText(this.statusMessage);
+      this.hud?.update({ status: this.statusMessage });
     });
   }
 
   create() {
     this.drawBackdrop();
-    this.createHud();
-    this.createCardStage();
+    this.hud = new GameHud(
+      this,
+      {
+        width: HUD_WIDTH,
+        margin: HUD_MARGIN,
+        padding: HUD_PADDING,
+        panelColor: PANEL_COLOR,
+        panelBorder: PANEL_BORDER,
+        accentColor: PANEL_ACCENT,
+        fontFamily: FONT_FAMILY,
+        textResolution: TEXT_RESOLUTION,
+        instructions: INSTRUCTION_TEXT,
+      },
+      {
+        onLeaveRequested: () => this.promptLeaveRoom(),
+      },
+    );
+    this.hud.init(this.composeHudState());
+
+    this.cardStage = new CardStage(this, {
+      hudWidth: HUD_WIDTH,
+      hudMargin: HUD_MARGIN,
+      fontFamily: FONT_FAMILY,
+      textResolution: TEXT_RESOLUTION,
+    });
+    this.cardStage.build();
     this.registerKeyboardShortcuts();
 
     this.scale.on('resize', this.handleResize, this);
@@ -145,8 +156,8 @@ export default class GameScene extends Phaser.Scene {
       this.scale.off('resize', this.handleResize, this);
       if (this.socket.connected) this.socket.disconnect();
       this.clearGroup(this.backgroundElements);
-      this.clearGroup(this.hudElements);
-      this.clearGroup(this.stageElements);
+      this.hud?.destroy();
+      this.cardStage?.destroy();
     });
   }
 
@@ -164,225 +175,16 @@ export default class GameScene extends Phaser.Scene {
     this.backgroundElements.push(layerOne, layerTwo);
   }
 
-  private createHud() {
-    this.clearGroup(this.hudElements);
-    this.leaveButtonBg = undefined;
-    this.leaveButtonLabel = undefined;
-    this.leaveButtonZone = undefined;
-
-    const { height } = this.scale;
-    const panelHeight = height - HUD_MARGIN * 2;
-
-    const panel = this.add
-      .rectangle(HUD_MARGIN, HUD_MARGIN, HUD_WIDTH, panelHeight, PANEL_COLOR, 0.92)
-      .setOrigin(0);
-    panel.setStrokeStyle(2, PANEL_BORDER, 0.9);
-
-    const contentX = panel.x + HUD_PADDING;
-    let cursorY = panel.y + HUD_PADDING;
-    const wrapWidth = HUD_WIDTH - HUD_PADDING * 2;
-
-    this.statusText = this.add
-      .text(contentX, cursorY, this.statusMessage, {
-        fontFamily: FONT_FAMILY,
-        fontSize: '20px',
-        color: '#ffffff',
-      })
-      .setResolution(TEXT_RESOLUTION);
-    this.hudElements.push(panel, this.statusText);
-    cursorY += 40;
-
-    this.add
-      .text(contentX, cursorY, 'Controles rápidos', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '16px',
-        fontStyle: 'bold',
-        color: '#a5b4fc',
-      })
-      .setResolution(TEXT_RESOLUTION);
-    cursorY += 28;
-
-    this.add
-      .text(contentX, cursorY, 'P • jogar carta\nD • comprar carta', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '16px',
-        color: '#e2e8f0',
-        lineSpacing: 8,
-      })
-      .setResolution(TEXT_RESOLUTION);
-    cursorY += 90;
-
-    this.roomText = this.add
-      .text(
-        contentX,
-        cursorY,
-        this.roomId ? `Sala atual: ${this.roomId}` : 'Nenhuma sala ativa.',
-        {
-          fontFamily: FONT_FAMILY,
-          fontSize: '18px',
-          color: PANEL_ACCENT,
-        },
-      )
-      .setResolution(TEXT_RESOLUTION);
-    cursorY += 50;
-
-    this.createLeaveButton(panel.x + HUD_WIDTH / 2, cursorY);
-    cursorY += 80;
-
-    this.add
-      .text(contentX, cursorY, 'Jogadores', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '16px',
-        fontStyle: 'bold',
-        color: '#cbd5ff',
-      })
-      .setResolution(TEXT_RESOLUTION);
-    cursorY += 26;
-
-    this.playerListText = this.add
-      .text(contentX, cursorY, this.lastPlayerListMessage, {
-        fontFamily: FONT_FAMILY,
-        fontSize: '16px',
-        color: '#cbd5f5',
-        lineSpacing: 6,
-        wordWrap: { width: wrapWidth },
-      })
-      .setResolution(TEXT_RESOLUTION);
-    cursorY += 150;
-
-    this.add
-      .text(contentX, cursorY, 'Log recente', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '16px',
-        fontStyle: 'bold',
-        color: '#f9a8d4',
-      })
-      .setResolution(TEXT_RESOLUTION);
-    cursorY += 26;
-
-    this.actionLog = this.add
-      .text(contentX, cursorY, 'Nenhuma ação ainda.', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '16px',
-        color: '#f472b6',
-        lineSpacing: 6,
-        wordWrap: { width: wrapWidth },
-      })
-      .setResolution(TEXT_RESOLUTION);
-  }
-
-  private createCardStage() {
-    this.clearGroup(this.stageElements);
-
-    const availableWidth = this.scale.width - HUD_WIDTH - HUD_MARGIN * 3;
-    const stageWidth = Math.min(420, availableWidth);
-    const stageX = this.scale.width - stageWidth / 2 - HUD_MARGIN;
-    const stageY = this.scale.height / 2;
-
-    const stagePanel = this.add
-      .rectangle(stageX, stageY, stageWidth, this.scale.height - 120, 0x101a33, 0.55)
-      .setOrigin(0.5);
-    stagePanel.setStrokeStyle(2, 0x1f2a44, 0.7);
-    this.stageElements.push(stagePanel);
-
-    this.cardShadow = this.add
-      .rectangle(stageX + 10, stageY + 12, 150, 210, 0x000000, 0.25)
-      .setOrigin(0.5);
-    this.cardBase = this.add.rectangle(stageX, stageY, 150, 210, 0xff5c63).setOrigin(0.5);
-    this.cardLabel = this.add
-      .text(stageX, stageY, 'UNO', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '36px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-      })
-      .setOrigin(0.5)
-      .setResolution(TEXT_RESOLUTION);
-    this.playerBadge = this.add
-      .text(stageX, stageY + 150, 'Aguardando conexão...', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '18px',
-        color: PANEL_ACCENT,
-      })
-      .setOrigin(0.5)
-      .setResolution(TEXT_RESOLUTION);
-
-    this.stageElements.push(
-      stagePanel,
-      this.cardShadow,
-      this.cardBase,
-      this.cardLabel,
-      this.playerBadge,
-    );
-  }
-
-  private createLeaveButton(centerX: number, y: number) {
-    const width = HUD_WIDTH - HUD_PADDING * 2;
-    const height = 54;
-
-    this.leaveButtonBg = this.add
-      .rectangle(centerX, y, width, height, 0xdc2626, 0.9)
-      .setOrigin(0.5);
-    this.leaveButtonBg.setStrokeStyle(2, 0xffffff, 0.85);
-
-    this.leaveButtonLabel = this.add
-      .text(centerX, y, 'Sair da sala', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '18px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-      })
-      .setOrigin(0.5)
-      .setResolution(TEXT_RESOLUTION);
-
-    this.leaveButtonZone = this.add
-      .zone(centerX, y, width, height)
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-
-    this.leaveButtonZone.on('pointerover', () => {
-      if (!this.canLeaveRoom()) return;
-      this.leaveButtonBg?.setFillStyle(0xf87171);
-    });
-    this.leaveButtonZone.on('pointerout', () => {
-      this.leaveButtonBg?.setFillStyle(0xdc2626);
-      this.leaveButtonBg?.setScale(1);
-    });
-    this.leaveButtonZone.on('pointerdown', () => {
-      if (!this.canLeaveRoom()) return;
-      this.leaveButtonBg?.setScale(0.98);
-    });
-    this.leaveButtonZone.on('pointerup', () => {
-      if (!this.canLeaveRoom()) {
-        this.leaveButtonBg?.setScale(1);
-        return;
-      }
-      this.leaveButtonBg?.setScale(1);
-      this.promptLeaveRoom();
-    });
-  }
-
   private drawPlaceholderCard(label: string) {
-    if (!this.cardBase || !this.cardLabel) {
+    if (!this.hud || !this.cardStage) {
       this.events.once(Phaser.Scenes.Events.CREATE, () => this.drawPlaceholderCard(label));
       return;
     }
 
     this.statusMessage = `Conectado como ${label}`;
-    this.statusText?.setText(this.statusMessage);
-    this.updatePlayerBadge();
-    this.cardLabel.setText('UNO');
-
-    const targets = [this.cardBase, this.cardShadow, this.cardLabel].filter(Boolean) as Phaser.GameObjects.GameObject[];
-
-    this.tweens.add({
-      targets,
-      scaleX: 1.04,
-      scaleY: 1.04,
-      yoyo: true,
-      duration: 200,
-      ease: 'Sine.easeOut',
-    });
+    this.hud?.update({ status: this.statusMessage });
+    this.cardStage?.setPlayerNickname(label);
+    this.cardStage?.pulsePlaceholder();
   }
 
   private registerKeyboardShortcuts() {
@@ -456,59 +258,11 @@ export default class GameScene extends Phaser.Scene {
     if (!sanitized) return;
     this.logLines.unshift(sanitized);
     this.logLines = this.logLines.slice(0, 5);
-    this.updateLogText();
-  }
-
-  private updateLogText() {
-    if (!this.actionLog) return;
-    if (!this.logLines.length) {
-      this.actionLog.setText('• Nenhuma ação ainda.');
-    } else {
-      this.actionLog.setText(this.logLines.map((line) => `• ${line}`).join('\n'));
-    }
-  }
-
-  private updateRoomText() {
-    if (!this.roomText) return;
-    if (this.roomId) {
-      this.roomText.setText(`Sala atual: ${this.roomId}`);
-    } else {
-      this.roomText.setText('Nenhuma sala ativa.');
-      this.playerListText?.setText('Nenhum jogador ainda.');
-    }
-    this.updateLeaveButtonState();
-  }
-
-  private updatePlayerBadge() {
-    if (!this.playerBadge) return;
-    if (this.player) {
-      this.playerBadge.setText(`Você: ${this.player.nickname}`);
-    } else {
-      this.playerBadge.setText('Aguardando conexão...');
-    }
-  }
-
-  private refreshPlayerBadge() {
-    this.updatePlayerBadge();
+    this.hud?.update({ logLines: [...this.logLines] });
   }
 
   private canLeaveRoom() {
     return Boolean(this.roomId) && !this.isLeavingRoom;
-  }
-
-  private updateLeaveButtonState() {
-    if (!this.leaveButtonBg || !this.leaveButtonZone) return;
-    if (this.canLeaveRoom()) {
-      this.leaveButtonBg.setFillStyle(0xdc2626, 0.95);
-      this.leaveButtonBg.setAlpha(1);
-      this.leaveButtonLabel?.setAlpha(1);
-      this.leaveButtonZone.setInteractive({ useHandCursor: true });
-    } else {
-      this.leaveButtonBg.setFillStyle(0x1f2937, 0.6);
-      this.leaveButtonBg.setAlpha(0.6);
-      this.leaveButtonLabel?.setAlpha(0.5);
-      this.leaveButtonZone.disableInteractive();
-    }
   }
 
   private promptLeaveRoom() {
@@ -521,15 +275,13 @@ export default class GameScene extends Phaser.Scene {
     }
     this.isLeavingRoom = true;
     this.pushLog('Saindo da sala...');
-    this.updateLeaveButtonState();
+    this.hud?.update({ leaveEnabled: this.canLeaveRoom() });
     this.socket.emit('room:leave');
   }
 
   private goBackToLobby(message?: string) {
     if (message) {
-      this.logLines.unshift(message);
-      this.logLines = this.logLines.slice(0, 5);
-      this.updateLogText();
+      this.pushLog(message);
     }
 
     if (this.hasReturnedToLobby) {
@@ -547,15 +299,38 @@ export default class GameScene extends Phaser.Scene {
 
   private handleResize(size: Phaser.Structs.Size) {
     this.cameras.resize(size.width, size.height);
-    this.scene.restart({
-      autoAction: this.pendingAction,
-      nickname: this.pendingNickname,
-      roomCode: this.pendingRoomCode,
-    });
+    this.drawBackdrop();
+    this.hud?.resize();
+    this.cardStage?.resize();
   }
 
   private clearGroup(group: Phaser.GameObjects.GameObject[]) {
     group.forEach((obj) => obj.destroy());
     group.length = 0;
+  }
+
+  private composeHudState(): HudSnapshot {
+    return {
+      status: this.statusMessage,
+      roomLabel: this.getRoomLabel(),
+      playerList: this.lastPlayerListMessage,
+      logLines: [...this.logLines],
+      leaveEnabled: this.canLeaveRoom(),
+    };
+  }
+
+  private updateRoomDetails(playerListOverride?: string) {
+    if (playerListOverride !== undefined) {
+      this.lastPlayerListMessage = playerListOverride;
+    }
+    this.hud?.update({
+      roomLabel: this.getRoomLabel(),
+      playerList: this.lastPlayerListMessage,
+      leaveEnabled: this.canLeaveRoom(),
+    });
+  }
+
+  private getRoomLabel() {
+    return this.roomId ? `Sala atual: ${this.roomId}` : 'Nenhuma sala ativa.';
   }
 }

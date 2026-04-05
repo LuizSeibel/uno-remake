@@ -1,0 +1,287 @@
+import Phaser from 'phaser';
+
+export type HudSnapshot = {
+  status: string;
+  roomLabel: string;
+  playerList: string;
+  logLines: string[];
+  leaveEnabled: boolean;
+};
+
+type HudOptions = {
+  width: number;
+  margin: number;
+  padding: number;
+  panelColor: number;
+  panelBorder: number;
+  accentColor: string;
+  fontFamily: string;
+  textResolution: number;
+  instructions: string;
+};
+
+type HudCallbacks = {
+  onLeaveRequested: () => void;
+};
+
+export default class GameHud {
+  private scene: Phaser.Scene;
+  private options: HudOptions;
+  private callbacks: HudCallbacks;
+  private elements: Phaser.GameObjects.GameObject[];
+  private statusText?: Phaser.GameObjects.Text;
+  private roomText?: Phaser.GameObjects.Text;
+  private playerListText?: Phaser.GameObjects.Text;
+  private actionLog?: Phaser.GameObjects.Text;
+  private leaveButtonBg?: Phaser.GameObjects.Rectangle;
+  private leaveButtonLabel?: Phaser.GameObjects.Text;
+  private leaveButtonZone?: Phaser.GameObjects.Zone;
+  private currentState: HudSnapshot;
+
+  constructor(scene: Phaser.Scene, options: HudOptions, callbacks: HudCallbacks) {
+    this.scene = scene;
+    this.options = options;
+    this.callbacks = callbacks;
+    this.elements = [];
+    this.currentState = {
+      status: '',
+      roomLabel: '',
+      playerList: '',
+      logLines: [],
+      leaveEnabled: false,
+    };
+  }
+
+  init(initialState: HudSnapshot) {
+    this.currentState = { ...initialState };
+    this.build();
+  }
+
+  update(partial: Partial<HudSnapshot>) {
+    this.currentState = { ...this.currentState, ...partial };
+
+    if (partial.status !== undefined) {
+      this.statusText?.setText(this.currentState.status);
+    }
+    if (partial.roomLabel !== undefined) {
+      this.roomText?.setText(this.currentState.roomLabel);
+    }
+    if (partial.playerList !== undefined) {
+      this.playerListText?.setText(this.currentState.playerList);
+    }
+    if (partial.logLines !== undefined) {
+      this.applyLog();
+    }
+    if (partial.leaveEnabled !== undefined) {
+      this.applyLeaveState();
+    }
+  }
+
+  resize() {
+    this.build();
+  }
+
+  destroy() {
+    this.elements.forEach((obj) => obj.destroy());
+    this.elements = [];
+    this.leaveButtonZone?.destroy();
+    this.leaveButtonZone = undefined;
+  }
+
+  private build() {
+    this.destroy();
+
+    const { height: gameHeight } = this.scene.scale;
+    const panelHeight = gameHeight - this.options.margin * 2;
+
+    const panel = this.scene.add
+      .rectangle(
+        this.options.margin,
+        this.options.margin,
+        this.options.width,
+        panelHeight,
+        this.options.panelColor,
+        0.92,
+      )
+      .setOrigin(0);
+    panel.setStrokeStyle(2, this.options.panelBorder, 0.9);
+
+    const contentX = panel.x + this.options.padding;
+    let cursorY = panel.y + this.options.padding;
+    const wrapWidth = this.options.width - this.options.padding * 2;
+
+    this.statusText = this.scene.add
+      .text(contentX, cursorY, this.currentState.status, {
+        fontFamily: this.options.fontFamily,
+        fontSize: '20px',
+        color: '#ffffff',
+      })
+      .setResolution(this.options.textResolution);
+
+    cursorY += 40;
+
+    this.elements.push(
+      panel,
+      this.statusText,
+      this.createLabel(contentX, cursorY, 'Controles rápidos', '#a5b4fc', 'bold'),
+    );
+    cursorY += 28;
+
+    this.elements.push(
+      this.scene.add
+        .text(contentX, cursorY, this.options.instructions, {
+          fontFamily: this.options.fontFamily,
+          fontSize: '16px',
+          color: '#e2e8f0',
+          lineSpacing: 8,
+        })
+        .setResolution(this.options.textResolution),
+    );
+    cursorY += 90;
+
+    this.roomText = this.scene.add
+      .text(contentX, cursorY, this.currentState.roomLabel, {
+        fontFamily: this.options.fontFamily,
+        fontSize: '18px',
+        color: this.options.accentColor,
+      })
+      .setResolution(this.options.textResolution);
+    this.elements.push(this.roomText);
+    cursorY += 50;
+
+    this.createLeaveButton(panel.x + this.options.width / 2, cursorY);
+    cursorY += 80;
+
+    this.elements.push(
+      this.createLabel(contentX, cursorY, 'Jogadores', '#cbd5ff', 'bold'),
+    );
+    cursorY += 26;
+
+    this.playerListText = this.scene.add
+      .text(contentX, cursorY, this.currentState.playerList, {
+        fontFamily: this.options.fontFamily,
+        fontSize: '16px',
+        color: '#cbd5f5',
+        lineSpacing: 6,
+        wordWrap: { width: wrapWidth },
+      })
+      .setResolution(this.options.textResolution);
+    this.elements.push(this.playerListText);
+    cursorY += 150;
+
+    this.elements.push(
+      this.createLabel(contentX, cursorY, 'Log recente', '#f9a8d4', 'bold'),
+    );
+    cursorY += 26;
+
+    this.actionLog = this.scene.add
+      .text(contentX, cursorY, 'Nenhuma ação ainda.', {
+        fontFamily: this.options.fontFamily,
+        fontSize: '16px',
+        color: '#f472b6',
+        lineSpacing: 6,
+        wordWrap: { width: wrapWidth },
+      })
+      .setResolution(this.options.textResolution);
+    this.elements.push(this.actionLog);
+
+    this.applyLog();
+    this.applyLeaveState();
+  }
+
+  private createLabel(
+    x: number,
+    y: number,
+    text: string,
+    color: string,
+    fontStyle?: string,
+  ) {
+    return this.scene.add
+      .text(x, y, text, {
+        fontFamily: this.options.fontFamily,
+        fontSize: '16px',
+        fontStyle,
+        color,
+      })
+      .setResolution(this.options.textResolution);
+  }
+
+  private createLeaveButton(centerX: number, y: number) {
+    const width = this.options.width - this.options.padding * 2;
+    const height = 54;
+
+    this.leaveButtonBg = this.scene.add
+      .rectangle(centerX, y, width, height, 0xdc2626, 0.9)
+      .setOrigin(0.5);
+    this.leaveButtonBg.setStrokeStyle(2, 0xffffff, 0.85);
+
+    this.leaveButtonLabel = this.scene.add
+      .text(centerX, y, 'Sair da sala', {
+        fontFamily: this.options.fontFamily,
+        fontSize: '18px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5)
+      .setResolution(this.options.textResolution);
+
+    this.leaveButtonZone = this.scene.add
+      .zone(centerX, y, width, height)
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+
+    this.leaveButtonZone.on('pointerover', () => {
+      if (!this.currentState.leaveEnabled) return;
+      this.leaveButtonBg?.setFillStyle(0xf87171);
+    });
+
+    this.leaveButtonZone.on('pointerout', () => {
+      this.leaveButtonBg?.setFillStyle(0xdc2626);
+      this.leaveButtonBg?.setScale(1);
+    });
+
+    this.leaveButtonZone.on('pointerdown', () => {
+      if (!this.currentState.leaveEnabled) return;
+      this.leaveButtonBg?.setScale(0.98);
+    });
+
+    this.leaveButtonZone.on('pointerup', () => {
+      if (!this.currentState.leaveEnabled) {
+        this.leaveButtonBg?.setScale(1);
+        return;
+      }
+      this.leaveButtonBg?.setScale(1);
+      this.callbacks.onLeaveRequested();
+    });
+
+    this.elements.push(this.leaveButtonBg, this.leaveButtonLabel, this.leaveButtonZone);
+  }
+
+  private applyLog() {
+    if (!this.actionLog) {
+      return;
+    }
+
+    if (!this.currentState.logLines.length) {
+      this.actionLog.setText('• Nenhuma ação ainda.');
+    } else {
+      this.actionLog.setText(this.currentState.logLines.map((line) => `• ${line}`).join('\n'));
+    }
+  }
+
+  private applyLeaveState() {
+    if (!this.leaveButtonBg || !this.leaveButtonZone || !this.leaveButtonLabel) {
+      return;
+    }
+
+    if (this.currentState.leaveEnabled) {
+      this.leaveButtonBg.setFillStyle(0xdc2626, 0.95).setAlpha(1);
+      this.leaveButtonLabel.setAlpha(1);
+      this.leaveButtonZone.setInteractive({ useHandCursor: true });
+    } else {
+      this.leaveButtonBg.setFillStyle(0x1f2937, 0.6).setAlpha(0.6);
+      this.leaveButtonLabel.setAlpha(0.5);
+      this.leaveButtonZone.disableInteractive();
+    }
+  }
+}
