@@ -1,0 +1,34 @@
+:root {
+  color-scheme: dark;
+  font-family: 'Space Mono', 'Fira Code', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #030712;
+  overflow: hidden;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+}
+
+canvas {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  max-width: 100vw;
+  max-height: 100vh;
+}
