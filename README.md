@@ -16,11 +16,13 @@ Prototipo de jogo de cartas multiplayer em tempo real inspirado em UNO. O projet
 - Sistema de host da sala, apenas host pode iniciar o jogo
 - Lobby, entrada e saída de salas
 - HUD com log de ações em tempo real
+- Validação de jogada no cliente e no servidor (cor/valor/curinga)
+- Seleção de carta com clique na mão do jogador
+- Fluxo de curinga corrigido: seleção obrigatória de cor, sem passar turno indevidamente
+- Carta da mesa agora reflete corretamente a cor ativa após curinga
 
 ### 📋 Tarefas Pendentes Imediatas
 - [ ] Comprar cartas não mostra a carta para os outros jogadores
-- [ ] Validação de cartas jogáveis
-- [ ] Seleção de carta com clique na mão
 - [ ] Efeito das cartas especiais
 - [ ] Mecanica de vitória
 - [ ] Regra do UNO!
@@ -35,6 +37,9 @@ Prototipo de jogo de cartas multiplayer em tempo real inspirado em UNO. O projet
 - Eventos de compra e descarte propagados em tempo real via Socket.IO.
 - Placeholder visual de carta e badge com nickname, com texto escalando para high-DPI.
 - Botão de sair da sala que retorna ao lobby e sincroniza o estado do servidor.
+- Jogada com clique direto na carta da mão (com validação de turno e validade da carta).
+- Menu de escolha de cor para curinga com bloqueio de ações até selecionar cor.
+- Sincronização da cor ativa da mesa (`currentColor`) para todos os jogadores.
 
 ## Arquitetura
 
@@ -91,27 +96,18 @@ Cada pasta possui um README próprio com detalhes específicos.
 ## 🚀 Roadmap de Implementação (Ordem de Prioridade)
 
 ### 🔴 PRIORIDADE ALTA (Regras Oficiais)
-1. **Validação de cartas jogáveis**
-   - Não pode jogar carta que não tem mesma cor, mesmo valor ou é curinga
-   - Não pode comprar carta se tem carta válida na mão
-
-2. **Seleção de carta na mão**
-   - Clicar na carta que quer jogar ao invés de sempre jogar a primeira
-   - Visual destaque na carta selecionada
-   - Animação quando joga a carta para mesa
-
-3. **Implementar efeitos das cartas especiais**
+1. **Implementar efeitos das cartas especiais**
    - `skip`: Pula o turno do próximo jogador
    - `reverse`: Inverte a ordem dos turnos
    - `+2`: Próximo jogador compra 2 cartas e perde a vez
    - `wild`: Curinga - jogador escolhe uma nova cor
    - `+4`: Curinga +4 - jogador escolhe cor, próximo compra 4 e perde vez
 
-4. **Regra do UNO!**
+2. **Regra do UNO!**
    - Quando jogador ficar com APENAS 1 carta, precisa anunciar "UNO" em até 2 segundos
    - Se não anunciar, outros jogadores podem acusar e ele compra 2 cartas
 
-5. **Condição de vitória**
+3. **Condição de vitória**
    - Quando um jogador jogar a última carta ele ganha a partida
    - Tela de vitória/derrota
    - Opção de jogar novamente
@@ -119,20 +115,20 @@ Cada pasta possui um README próprio com detalhes específicos.
 ---
 
 ### 🟠 PRIORIDADE MÉDIA
-6. Embaralhar pilha de descarte quando baralho acabar
-7. Mostrar quantidade de cartas de cada adversário
-8. Visualização dos jogadores ao redor da mesa
-9. Timer por turno (15 segundos)
-10. Sistema de pontuação entre partidas
+4. Embaralhar pilha de descarte quando baralho acabar
+5. Mostrar quantidade de cartas de cada adversário
+6. Visualização dos jogadores ao redor da mesa
+7. Timer por turno (15 segundos)
+8. Sistema de pontuação entre partidas
 
 ---
 
 ### 🟢 PRIORIDADE BAIXA / Polimento
-11. Animações de cartas (aparecer, voar, virar)
-12. Efeitos sonoros
-13. Chat de texto na sala
-14. Melhorar UI e assets das cartas
-15. Jogar contra bots
+9. Animações de cartas (aparecer, voar, virar)
+10. Efeitos sonoros
+11. Chat de texto na sala
+12. Melhorar UI e assets das cartas
+13. Jogar contra bots
 
 ---
 
