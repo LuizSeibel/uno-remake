@@ -42,6 +42,29 @@ export default class GameScene extends Phaser.Scene {
     super('GameScene');
   }
 
+  /**
+   * ✅ Valida se uma carta pode ser jogada seguindo as regras oficiais do UNO
+   */
+  private isValidCardPlay(card: Card, topCard: Card, currentColor: Card['color']): boolean {
+    // Curinga e Curinga +4 SEMPRE podem ser jogados
+    if (card.color === 'wild') {
+      return true;
+    }
+
+    // REGRA 1: Cores combinam
+    if (card.color === currentColor) {
+      return true;
+    }
+
+    // REGRA 2: Valores/Numero combinam
+    if (card.value === topCard.value) {
+      return true;
+    }
+
+    // Nenhuma condição atendida: JOGADA INVÁLIDA
+    return false;
+  }
+
   init(data?: SceneLaunchData) {
     this.pendingAction = data?.autoAction;
     this.pendingNickname = data?.nickname;
@@ -280,7 +303,22 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
 
-    // Remove carta selecionada da mão local
+    // ✅ VALIDA LOCALMENTE ANTES DE ENVIAR
+    const topCard = this.cardStage?.getTableCard();
+    const currentColor = this.cardStage?.getCurrentColor();
+    
+    if (topCard && currentColor && !this.isValidCardPlay(card, topCard, currentColor)) {
+      this.pushLog('❌ Jogada inválida! Essa carta não combina com a mesa.');
+      return;
+    }
+
+    // ✅ SE FOR CURINGA: ABRE MODAL PARA ESCOLHER COR
+    if (card.color === 'wild') {
+      this.showColorSelectionModal(card, index);
+      return;
+    }
+
+    // ✅ SÓ REMOVE CARTA APÓS VALIDAÇÃO PASSAR
     this.player.hand.splice(index, 1);
 
     this.socket.emit('card:play', {
@@ -295,6 +333,65 @@ export default class GameScene extends Phaser.Scene {
       this.cardStage.setHandCards(this.player.hand);
       this.cardStage.setTableCard(card);
     }
+  }
+
+  /**
+   * ✅ Modal para escolher cor quando joga Curinga
+   */
+  private showColorSelectionModal(card: any, index: number) {
+    this.pushLog('🎨 Escolha a cor que quer definir:');
+
+    const colorButtons = ['red', 'green', 'blue', 'yellow'] as const;
+    const colorNames = { red: 'Vermelho', green: 'Verde', blue: 'Azul', yellow: 'Amarelo' };
+
+    // Cria modal de seleção
+    colorButtons.forEach((color, i) => {
+      const button = this.add.rectangle(
+        this.scale.width / 2 - 180 + i * 120,
+        this.scale.height / 2,
+        100, 100,
+        { red: 0xdc2626, green: 0x16a34a, blue: 0x2563eb, yellow: 0xeab308 }[color]
+      )
+      .setOrigin(0.5)
+      .setStrokeStyle(3, 0xffffff)
+      .setInteractive({ useHandCursor: true });
+
+      this.add.text(button.x, button.y, colorNames[color], {
+        fontFamily: FONT_FAMILY,
+        fontSize: '14px',
+        color: '#ffffff',
+        fontStyle: 'bold'
+      })
+      .setOrigin(0.5)
+      .setResolution(2);
+
+      // Ao clicar na cor
+      button.on('pointerdown', () => {
+        // Remove a carta da mão
+        this.player!.hand!.splice(index, 1);
+        
+        // Envia para servidor com a cor selecionada
+        this.socket.emit('card:play', {
+          playerId: this.player!.id,
+          card: card,
+          selectedColor: color
+        });
+
+        this.pushLog(`✅ Você definiu cor ${colorNames[color]}`);
+
+        // Atualiza visualização
+        if (this.cardStage) {
+          this.cardStage.setHandCards(this.player!.hand!);
+          this.cardStage.setTableCard(card);
+        }
+
+        // Fecha modal
+        this.cameras.main.fadeOut(200);
+        this.time.delayedCall(200, () => {
+          this.cameras.main.fadeIn(200);
+        });
+      });
+    });
   }
 
   private handlePlayCard() {

@@ -29,6 +29,7 @@ export type CardActionType = 'play' | 'draw';
 export interface PlayCardPayload {
   playerId: string;
   card: Card;
+  selectedColor?: CardColor;
 }
 
 export interface DrawCardPayload {

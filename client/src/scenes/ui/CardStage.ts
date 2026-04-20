@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import type { Card } from '../../types';
 
 type CardStageOptions = {
   hudWidth: number;
@@ -228,5 +229,27 @@ export default class CardStage {
     } else {
       this.playerBadge.setText('Aguardando conexão...');
     }
+  }
+
+  /**
+   * ✅ Retorna a carta atual na mesa
+   */
+  getTableCard(): any | undefined {
+    return this.tableCard;
+  }
+
+  /**
+   * ✅ Retorna a cor atual da mesa
+   */
+  getCurrentColor(): Card['color'] | undefined {
+    if (!this.tableCard) return undefined;
+    const colorMap: Record<number, Card['color']> = {
+      0xdc2626: 'red',
+      0x16a34a: 'green',
+      0x2563eb: 'blue',
+      0xeab308: 'yellow',
+      0x1f2937: 'wild'
+    };
+    return colorMap[this.tableCard.fillColor];
   }
 }

@@ -160,9 +160,22 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // ✅ VALIDAÇÃO DAS REGRAS UNO: Verifica se jogada é permitida
+    const topCard = room.discardPile[room.discardPile.length - 1];
+    if (topCard && !isValidCardPlay(payload.card, topCard, room.currentColor)) {
+      socket.emit('room:error', { message: '❌ Jogada inválida! Essa carta não combina com a mesa.' });
+      return;
+    }
+
     // ✅ Adiciona carta jogada na pilha de descarte
     room.discardPile.push(payload.card);
-    room.currentColor = payload.card.color === 'wild' ? room.currentColor : payload.card.color;
+    
+    // ✅ Se for CURINGA: usa a cor que o jogador escolheu
+    if (payload.card.color === 'wild' && payload.selectedColor) {
+      room.currentColor = payload.selectedColor;
+    } else {
+      room.currentColor = payload.card.color;
+    }
 
     // ✅ Remove carta da mão do jogador no servidor
     const cardIndex = actor.hand.findIndex(c => c.id === payload.card.id);
@@ -296,6 +309,29 @@ app.get('/health', (_req, res) => {
 server.listen(3001, () => {
   console.log('Server listening on http://localhost:3001');
 });
+
+/**
+ * ✅ Valida se uma carta pode ser jogada seguindo as regras oficiais do UNO
+ */
+function isValidCardPlay(card: Card, topCard: Card, currentColor: Card['color']): boolean {
+  // Curinga e Curinga +4 SEMPRE podem ser jogados
+  if (card.color === 'wild') {
+    return true;
+  }
+
+  // REGRA 1: Cores combinam
+  if (card.color === currentColor) {
+    return true;
+  }
+
+  // REGRA 2: Valores/Numero combinam
+  if (card.value === topCard.value) {
+    return true;
+  }
+
+  // Nenhuma condição atendida: JOGADA INVÁLIDA
+  return false;
+}
 
 function passTurnToNextPlayer(room: Room) {
   const currentPlayerIndex = room.players.findIndex(p => p.isTurn);
