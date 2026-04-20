@@ -71,7 +71,7 @@ Para testar multiplayer local, abra em duas abas (ou dois navegadores).
 ## Controles atuais
 
 - Clique em uma carta da mão para jogar.
-- `P`: joga a primeira carta da mão (atalho).
+- `P`: joga uma carta válida (atalho).
 - `D`: compra uma carta (somente na sua vez).
 - Botão de sair da sala disponível no HUD.
 

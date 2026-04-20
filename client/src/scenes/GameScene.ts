@@ -491,8 +491,26 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
 
-    // ✅ Pega a primeira carta para atalho de teclado
-    this.handleCardClick(this.player.hand[0], 0);
+    // ✅ Atalho P: joga a primeira carta válida para a mesa
+    const topCard = this.cardStage?.getTableCard();
+    const currentColor = this.cardStage?.getCurrentColor();
+
+    let playableIndex = -1;
+    if (!topCard || !currentColor) {
+      playableIndex = 0;
+    } else {
+      playableIndex = this.player.hand.findIndex((card) =>
+        this.isValidCardPlay(card, topCard, currentColor),
+      );
+    }
+
+    if (playableIndex === -1) {
+      this.pushLog('❌ Nenhuma carta da sua mão corresponde à mesa.');
+      return;
+    }
+
+    const playableCard = this.player.hand[playableIndex];
+    this.handleCardClick(playableCard, playableIndex);
   }
 
   private handleDrawCard() {
