@@ -30,7 +30,7 @@ const io = new Server(server, {
 });
 
 const store = createGameStore();
-const STARTING_HAND_SIZE = 10;
+const STARTING_HAND_SIZE = 1;
 
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
@@ -410,6 +410,7 @@ app.get('/health', (_req, res) => {
 server.listen(SERVER_PORT, () => {
   console.log(`Server listening on http://localhost:${SERVER_PORT}`);
 });
+
 
 
 
