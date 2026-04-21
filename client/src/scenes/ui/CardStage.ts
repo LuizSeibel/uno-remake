@@ -45,6 +45,12 @@ export default class CardStage {
   private currentTableCard?: Card;
   private currentTableColor?: Card['color'];
   private onCardSelected?: (card: Card, index: number) => void;
+  private handOffset = 0;
+  private handVisibleCount = 0;
+  private handOverflowActive = false;
+  private handPageStep = 1;
+  private lastHandWheelAt = 0;
+  private handWheelHandler?: (pointer: Phaser.Input.Pointer, currentlyOver: unknown, deltaX: number, deltaY: number) => void;
 
   constructor(scene: Phaser.Scene, options: CardStageOptions) {
     this.scene = scene;
@@ -142,6 +148,9 @@ export default class CardStage {
 
   setHandCards(cards: Card[]) {
     this.handCards = cards;
+    if (this.handOffset > Math.max(0, cards.length - 1)) {
+      this.handOffset = 0;
+    }
     this.renderHandCards();
   }
 
@@ -205,6 +214,7 @@ export default class CardStage {
   private renderHandCards() {
     this.handElements.forEach((obj) => obj.destroy());
     this.handElements = [];
+    this.teardownHandWheelInteraction();
 
     if (this.handCards.length === 0) return;
 
@@ -212,26 +222,59 @@ export default class CardStage {
     const cardsCount = this.handCards.length;
     const handPadding = clamp(metrics.stageWidth * 0.05, 8, 24);
     const availableWidth = Math.max(120, metrics.stageRight - metrics.stageLeft - handPadding * 2);
+    const handViewportWidth = clamp(
+      availableWidth * (this.options.compact ? 0.94 : 0.9),
+      240,
+      availableWidth,
+    );
 
     const scale = this.options.tableCardScale ?? 1;
-    const minCardWidth = 34;
-    let cardWidth = clamp(88 * scale, 58, 92);
-    let spacing = clamp(18 * scale, 4, 20);
+    const idealCardWidth = clamp(80 * scale, 58, 94);
+    const idealSpacing = clamp(14 * scale, 8, 18);
+    const minVisibleCards = this.options.compact ? 3 : 5;
+    const idealVisibleCount = Math.max(
+      minVisibleCards,
+      Math.floor((handViewportWidth + idealSpacing) / (idealCardWidth + idealSpacing)),
+    );
 
-    const desiredWidth = cardsCount * cardWidth + (cardsCount - 1) * spacing;
-    if (desiredWidth > availableWidth) {
-      if (cardsCount > 1) {
-        spacing = clamp((availableWidth - cardsCount * cardWidth) / (cardsCount - 1), 3, spacing);
+    this.handOverflowActive = cardsCount > idealVisibleCount;
+
+    let visibleOffset = 0;
+    let visibleCount = cardsCount;
+    let cardWidth = idealCardWidth;
+    let spacing = idealSpacing;
+
+    if (this.handOverflowActive) {
+      visibleCount = Math.max(minVisibleCards, idealVisibleCount);
+      const maxOffset = Math.max(0, cardsCount - visibleCount);
+      this.handOffset = clamp(this.handOffset, 0, maxOffset);
+      visibleOffset = this.handOffset;
+      this.handVisibleCount = visibleCount;
+
+      if (visibleCount > 1) {
+        spacing = clamp((handViewportWidth - visibleCount * cardWidth) / (visibleCount - 1), 6, idealSpacing);
       }
 
-      const remainingWidth = availableWidth - (cardsCount - 1) * spacing;
-      if (remainingWidth / cardsCount < cardWidth) {
-        cardWidth = Math.max(minCardWidth, remainingWidth / cardsCount);
+      this.handPageStep = Math.max(2, Math.floor(visibleCount * 0.55));
+    } else {
+      this.handOffset = 0;
+      this.handVisibleCount = cardsCount;
+      this.handPageStep = 1;
+
+      if (cardsCount > 1) {
+        const fitSpacing = (handViewportWidth - cardsCount * cardWidth) / (cardsCount - 1);
+        spacing = clamp(fitSpacing, idealSpacing, 22);
+      }
+
+      const requiredWidth = cardsCount * cardWidth + (cardsCount - 1) * spacing;
+      if (requiredWidth < handViewportWidth) {
+        const extraPerCard = (handViewportWidth - requiredWidth) / cardsCount;
+        cardWidth = clamp(cardWidth + extraPerCard, idealCardWidth, 102);
       }
     }
 
     const cardHeight = cardWidth * 1.45;
-    const totalWidth = cardsCount * cardWidth + (cardsCount - 1) * spacing;
+    const totalWidth = visibleCount * cardWidth + (visibleCount - 1) * spacing;
     const startX = metrics.stageX - totalWidth / 2;
     const baseY = clamp(
       this.scene.scale.height - (this.options.handBottomOffset ?? 96),
@@ -241,7 +284,10 @@ export default class CardStage {
     const hoverOffset = clamp(cardHeight * 0.12, 6, 16);
     const valueFontSize = `${Math.round(clamp(cardWidth * 0.28, 12, 24))}px`;
 
-    this.handCards.forEach((card, index) => {
+    const cardsToRender = this.handCards.slice(visibleOffset, visibleOffset + visibleCount);
+
+    cardsToRender.forEach((card, index) => {
+      const globalIndex = visibleOffset + index;
       const x = startX + index * (cardWidth + spacing) + cardWidth / 2;
       
       const bg = this.scene.add
@@ -283,12 +329,103 @@ export default class CardStage {
       // Evento de clique
       bg.on('pointerdown', () => {
         if (this.onCardSelected) {
-          this.onCardSelected(card, index);
+          this.onCardSelected(card, globalIndex);
         }
       });
 
       this.handElements.push(bg, valueText);
     });
+
+    if (this.handOverflowActive) {
+      const maxOffset = Math.max(0, this.handCards.length - visibleCount);
+      this.renderOverflowControls(metrics, baseY, cardHeight, maxOffset, totalWidth);
+      this.setupHandWheelInteraction(maxOffset);
+    }
+  }
+
+  private renderOverflowControls(
+    metrics: StageMetrics,
+    baseY: number,
+    cardHeight: number,
+    maxOffset: number,
+    totalWidth: number,
+  ) {
+    const buttonWidth = 24;
+    const buttonHeight = 28;
+    const controlsPadding = 24;
+    const leftX = Math.max(metrics.stageLeft + 14, metrics.stageX - totalWidth / 2 - controlsPadding);
+    const rightX = Math.min(metrics.stageRight - 14, metrics.stageX + totalWidth / 2 + controlsPadding);
+    const indicatorY = baseY - cardHeight / 2 - 16;
+
+    const makeButton = (x: number, symbol: string, enabled: boolean, delta: number) => {
+      const bg = this.scene.add
+        .rectangle(x, baseY, buttonWidth, buttonHeight, enabled ? 0x0f172a : 0x111827, enabled ? 0.85 : 0.45)
+        .setOrigin(0.5)
+        .setStrokeStyle(1, 0x94a3b8, enabled ? 0.85 : 0.35);
+
+      const label = this.scene.add
+        .text(x, baseY, symbol, {
+          fontFamily: this.options.fontFamily,
+          fontSize: '18px',
+          color: enabled ? '#e2e8f0' : '#64748b',
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
+        .setResolution(this.options.textResolution);
+
+      if (enabled) {
+        bg.setInteractive({ useHandCursor: true });
+        bg.on('pointerdown', () => this.shiftHandOffset(delta * this.handPageStep, maxOffset));
+      }
+
+      this.handElements.push(bg, label);
+    };
+
+    const canGoLeft = this.handOffset > 0;
+    const canGoRight = this.handOffset < maxOffset;
+    makeButton(leftX, '‹', canGoLeft, -1);
+    makeButton(rightX, '›', canGoRight, 1);
+
+    const start = this.handOffset + 1;
+    const end = Math.min(this.handCards.length, this.handOffset + this.handVisibleCount);
+    const indicator = this.scene.add
+      .text(metrics.stageX, indicatorY, `${start}-${end} / ${this.handCards.length} cartas`, {
+        fontFamily: this.options.fontFamily,
+        fontSize: `${Math.round(clamp(13 * (this.options.fontScale ?? 1), 11, 14))}px`,
+        color: '#93c5fd',
+      })
+      .setOrigin(0.5)
+      .setResolution(this.options.textResolution);
+
+    this.handElements.push(indicator);
+  }
+
+  private shiftHandOffset(delta: number, maxOffset: number) {
+    const next = clamp(this.handOffset + delta, 0, maxOffset);
+    if (next === this.handOffset) return;
+    this.handOffset = next;
+    this.renderHandCards();
+  }
+
+  private setupHandWheelInteraction(maxOffset: number) {
+    this.handWheelHandler = (_pointer, _currentlyOver, _deltaX, deltaY) => {
+      if (!this.handOverflowActive) return;
+      if (Math.abs(deltaY) < 0.1) return;
+      const now = this.scene.time.now;
+      if (now - this.lastHandWheelAt < 80) return;
+      this.lastHandWheelAt = now;
+
+      const wheelStep = Math.max(2, Math.floor(this.handVisibleCount * 0.4));
+      this.shiftHandOffset(deltaY > 0 ? wheelStep : -wheelStep, maxOffset);
+    };
+
+    this.scene.input.on('wheel', this.handWheelHandler);
+  }
+
+  private teardownHandWheelInteraction() {
+    if (!this.handWheelHandler) return;
+    this.scene.input.off('wheel', this.handWheelHandler);
+    this.handWheelHandler = undefined;
   }
 
   private applyNickname() {
@@ -347,6 +484,7 @@ export default class CardStage {
     this.elements = [];
     this.handElements.forEach((obj) => obj.destroy());
     this.handElements = [];
+    this.teardownHandWheelInteraction();
     this.tableCardShape?.destroy();
     this.tableCardShape = undefined;
     this.tableCardText?.destroy();
