@@ -30,7 +30,7 @@ const io = new Server(server, {
 });
 
 const store = createGameStore();
-const STARTING_HAND_SIZE = 1;
+const STARTING_HAND_SIZE = 10;
 
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
